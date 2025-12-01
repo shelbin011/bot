@@ -227,18 +227,20 @@ if not BOT_TOKEN:
 def main_menu_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [
-            InlineKeyboardButton("📄 Help", callback_data="help"),
+            InlineKeyboardButton("📝 Help", callback_data="help"),
             InlineKeyboardButton("ℹ️ About", callback_data="about"),
         ],
         [
             InlineKeyboardButton("⏰ Time", callback_data="time"),
-            InlineKeyboardButton("👤 Who am I?", callback_data="me"),
+            InlineKeyboardButton("👤 Profile", callback_data="me"),
         ],
         [
             InlineKeyboardButton("😂 Joke", callback_data="joke"),
             InlineKeyboardButton("🎲 Dice", callback_data="dice"),
         ],
-        [InlineKeyboardButton("✨ Quote", callback_data="quote")],
+        [
+            InlineKeyboardButton("✨ Quote", callback_data="quote"),
+        ],
         [
             InlineKeyboardButton("🎮 Games", callback_data="games"),
             InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
@@ -250,16 +252,12 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
 def games_menu_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [
-            InlineKeyboardButton("🪨📄✂️ Rock-Paper-Scissors", callback_data="game_rps"),
+            InlineKeyboardButton("🪨📄✂️ RPS", callback_data="game_rps"),
+            InlineKeyboardButton("🔢 Guess Number", callback_data="game_guess"),
         ],
         [
-            InlineKeyboardButton("🔢 Guess the Number", callback_data="game_guess"),
-        ],
-        [
-            InlineKeyboardButton("🧠 Trivia Quiz", callback_data="game_trivia"),
-        ],
-        [
-            InlineKeyboardButton("➕ Math Challenge", callback_data="game_math"),
+            InlineKeyboardButton("🧠 Trivia", callback_data="game_trivia"),
+            InlineKeyboardButton("➕ Math", callback_data="game_math"),
         ],
         [
             InlineKeyboardButton("🏆 Leaderboard", callback_data="leaderboard"),
@@ -272,7 +270,7 @@ def games_menu_keyboard() -> InlineKeyboardMarkup:
 
 
 def settings_menu_keyboard(fun_mode: bool) -> InlineKeyboardMarkup:
-    status = "ON ✅" if fun_mode else "OFF ❌"
+    status = "🟢 ON" if fun_mode else "🔴 OFF"
     keyboard = [
         [
             InlineKeyboardButton(f"🎉 Fun Mode: {status}", callback_data="toggle_fun"),
@@ -1346,8 +1344,6 @@ def main():
 
     # Games via commands (optional: /trivia, /math trigger same logic as buttons)
     async def trivia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query_like = type("obj", (), {"data": "game_trivia"})()
-        fake_update = Update(update.update_id, callback_query=None)
         # Instead of faking callback, just reuse logic directly:
         trivia_qs = [
             ("Which language is this bot written in?", "python"),
