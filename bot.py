@@ -9,7 +9,6 @@ from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    ChatMemberUpdated,
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -17,7 +16,6 @@ from telegram.ext import (
     ContextTypes,
     CallbackQueryHandler,
     MessageHandler,
-    ChatMemberHandler,
     filters,
 )
 
@@ -25,8 +23,6 @@ import requests
 from urllib.parse import quote_plus
 
 # -------------------- Config --------------------
-OWNER_USERNAMES = {"Shelbin34"}
-
 DB_PATH = "bot_data.db"
 
 # -------------------- Logging --------------------
@@ -37,6 +33,7 @@ stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 logger.addHandler(stream_handler)
 
+
 # -------------------- DB Helpers --------------------
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -44,24 +41,11 @@ def get_db_connection():
     return conn
 
 
-def ensure_column(cur, table: str, column_def: str):
-    """
-    Ensure a column exists in a table, if not, add it.
-    column_def e.g.: "xp INTEGER DEFAULT 0"
-    """
-    col_name = column_def.split()[0]
-    cur.execute(f"PRAGMA table_info({table})")
-    cols = [row[1] for row in cur.fetchall()]
-    if col_name not in cols:
-        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
-        logger.info("Added column %s to %s", col_name, table)
-
-
 def init_db():
     conn = get_db_connection()
     cur = conn.cursor()
 
-    # Base users table (original structure)
+    # Users table
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -71,31 +55,20 @@ def init_db():
             last_name TEXT,
             created_at TEXT,
             bio TEXT,
-            fun_mode INTEGER DEFAULT 1,
-            games_played INTEGER DEFAULT 0,
+            xp INTEGER DEFAULT 0,
+            level INTEGER DEFAULT 1,
+            coins INTEGER DEFAULT 0,
+            messages_count INTEGER DEFAULT 0,
             dice_plays INTEGER DEFAULT 0,
             dice_highscore INTEGER DEFAULT 0,
+            games_played INTEGER DEFAULT 0,
             rps_wins INTEGER DEFAULT 0,
             rps_losses INTEGER DEFAULT 0,
-            rps_draws INTEGER DEFAULT 0
+            rps_draws INTEGER DEFAULT 0,
+            birthday TEXT
         )
         """
     )
-
-    # New columns (will be added to existing DB if missing)
-    new_columns = [
-        "xp INTEGER DEFAULT 0",
-        "level INTEGER DEFAULT 1",
-        "coins INTEGER DEFAULT 0",
-        "messages_count INTEGER DEFAULT 0",
-        "last_daily TEXT",
-        "last_daily_challenge TEXT",
-        "birthday TEXT",
-        "title TEXT",
-        "warnings_count INTEGER DEFAULT 0",
-    ]
-    for col_def in new_columns:
-        ensure_column(cur, "users", col_def)
 
     # Notes table
     cur.execute(
@@ -132,10 +105,6 @@ def upsert_user(user):
     conn.close()
 
 
-def is_admin(user) -> bool:
-    return user.username in OWNER_USERNAMES
-
-
 def update_stat(user_id: int, field: str, value, mode="inc"):
     conn = get_db_connection()
     cur = conn.cursor()
@@ -156,28 +125,6 @@ def get_user(user_id: int):
     return row
 
 
-def get_leaderboard(field: str, limit: int = 5):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        f"SELECT id, username, first_name, {field} as score FROM users "
-        f"WHERE {field} > 0 ORDER BY {field} DESC LIMIT ?",
-        (limit,),
-    )
-    rows = cur.fetchall()
-    conn.close()
-    return rows
-
-
-def get_user_count():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM users")
-    (count,) = cur.fetchone()
-    conn.close()
-    return count
-
-
 def add_xp_and_coins(user_id: int, xp_gain: int = 0, coins_gain: int = 0):
     """Add XP and coins, auto-level-up based on XP."""
     # Increase XP and coins
@@ -190,7 +137,7 @@ def add_xp_and_coins(user_id: int, xp_gain: int = 0, coins_gain: int = 0):
     row = get_user(user_id)
     if not row:
         return
-    xp = row["xp"] if "xp" in row.keys() else 0
+    xp = row["xp"]
     new_level = 1 + xp // 100  # Simple formula: every 100 XP = +1 level
     if new_level > (row["level"] or 1):
         update_stat(user_id, "level", new_level, mode="set")
@@ -227,23 +174,12 @@ if not BOT_TOKEN:
 def main_menu_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [
-            InlineKeyboardButton("📝 Help", callback_data="help"),
-            InlineKeyboardButton("ℹ️ About", callback_data="about"),
-        ],
-        [
+            InlineKeyboardButton("🧾 Help", callback_data="help"),
             InlineKeyboardButton("⏰ Time", callback_data="time"),
+        ],
+        [
             InlineKeyboardButton("👤 Profile", callback_data="me"),
-        ],
-        [
-            InlineKeyboardButton("😂 Joke", callback_data="joke"),
-            InlineKeyboardButton("🎲 Dice", callback_data="dice"),
-        ],
-        [
-            InlineKeyboardButton("✨ Quote", callback_data="quote"),
-        ],
-        [
             InlineKeyboardButton("🎮 Games", callback_data="games"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
         ],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -256,24 +192,11 @@ def games_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🔢 Guess Number", callback_data="game_guess"),
         ],
         [
-            InlineKeyboardButton("🧠 Trivia", callback_data="game_trivia"),
-            InlineKeyboardButton("➕ Math", callback_data="game_math"),
+            InlineKeyboardButton("⚡ Hangman", callback_data="game_hangman"),
+            InlineKeyboardButton("⬆️⬇️ Higher/Lower", callback_data="game_hilo"),
         ],
         [
-            InlineKeyboardButton("🏆 Leaderboard", callback_data="leaderboard"),
-        ],
-        [
-            InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_main"),
-        ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def settings_menu_keyboard(fun_mode: bool) -> InlineKeyboardMarkup:
-    status = "🟢 ON" if fun_mode else "🔴 OFF"
-    keyboard = [
-        [
-            InlineKeyboardButton(f"🎉 Fun Mode: {status}", callback_data="toggle_fun"),
+            InlineKeyboardButton("🧩 Anagram", callback_data="game_anagram"),
         ],
         [
             InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_main"),
@@ -289,21 +212,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("User %s (%s) started the bot.", user.id, user.username)
 
     welcome_text = (
-        "🤖 *Welcome to TeleBot+!*\n\n"
-        "I'm a feature-rich Telegram bot with games, profiles, stats, notes, and more.\n\n"
+        "🤖 *Welcome to TeleMini!*\n\n"
+        "A small multi-feature bot with:\n"
+        "• Profiles, XP, level, coins\n"
+        "• Games (RPS, Guess, Hangman, etc.)\n"
+        "• Notes\n"
+        "• Weather & URL shortener\n\n"
+        "Use the buttons or commands below to get started.\n\n"
         "📌 *Quick Commands:*\n"
-        "• /help - See all commands\n"
-        "• /time - Current time\n"
-        "• /me - Your info\n"
-        "• /profile - View your profile\n"
-        "• /setbio <text> - Set your bio\n"
-        "• /setbirthday DD-MM - Set your birthday\n"
-        "• /balance - XP, level & coins\n"
-        "• /leaderboard - Game rankings\n"
-        "• /note <text> - Save a note\n"
-        "• /notes - View notes\n"
-        "• /weather <city> - Weather info\n"
-        "• /shorten <url> - Shorten a link\n"
+        "/help - Show all commands\n"
+        "/profile - Your stats\n"
+        "/note - Save a note\n"
+        "/weather - Weather info\n"
+        "/shorten - Shorten link\n"
     )
 
     await update.message.reply_text(
@@ -319,39 +240,27 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     help_text = (
         "📄 *Available Commands:*\n\n"
+        "🧩 *General:*\n"
         "/start - Show main menu\n"
-        "/help - Show this help\n"
-        "/time - Show current time\n"
-        "/me - Show your username & ID\n"
-        "/info - About this bot\n"
-        "/joke - Get a random joke\n"
-        "/dice - Roll a dice\n"
-        "/quote - Get an inspirational quote\n\n"
+        "/help - This help\n"
+        "/time - Current time\n"
+        "/me - Your username & ID\n\n"
         "👤 *Profile & Economy:*\n"
         "/profile - View your profile & stats\n"
-        "/setbio <text> - Set your public bio\n"
+        "/setbio <text> - Set your bio\n"
         "/setbirthday DD-MM - Set your birthday\n"
-        "/balance - View XP, level & coins\n"
-        "/leaderboard - View top players\n\n"
-        "🧠 *Games:*\n"
-        "Use the *Games* menu button, or:\n"
-        "/trivia - Start a trivia question\n"
-        "/math - Start a math challenge\n\n"
+        "/balance - View XP, level & coins\n\n"
+        "🎮 *Games:*\n"
+        "Use the *Games* button or:\n"
+        "/dice - Roll a dice\n"
+        "/trivia - Trivia question\n"
+        "/math - Math challenge\n\n"
         "📝 *Notes & Tools:*\n"
         "/note <text> - Save a note\n"
         "/notes - List your notes\n"
-        "/deletenote <id> - Delete a note\n"
-        "/weather <city> - Current weather (requires API key)\n"
-        "/shorten <url> - Shorten a long URL\n"
-        "/daily - Daily reward & quote\n\n"
-        "🛠 *Admin (owner only):*\n"
-        "/admin - Admin panel\n"
-        "/broadcast <text> - Send message to all users\n"
-        "/stats - Global stats\n"
-        "/topactive - Top active users\n"
-        "/warn - Reply to a user to warn\n"
-        "/ban - Reply to ban a user\n"
-        "/unban - Reply to unban\n"
+        "/deletenote <id> - Delete note\n"
+        "/weather <city> - Weather info\n"
+        "/shorten <url> - Shorten a link\n"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
@@ -373,59 +282,6 @@ async def me_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
-async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    upsert_user(user)
-    await update.message.reply_text(
-        "🤖 *TeleBot+ v3.0*\n\n"
-        "A learning project with admin tools, profiles, XP, coins, games, leaderboards, notes and more.",
-        parse_mode="Markdown",
-    )
-
-
-async def joke_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    upsert_user(user)
-    jokes = [
-        "Why do programmers prefer dark mode? Because light attracts bugs! 🐛",
-        "How many programmers does it take to change a light bulb? None, that's hardware!",
-        "Why do Java developers wear glasses? Because they don't C#! 👓",
-    ]
-    joke = random.choice(jokes)
-    await update.message.reply_text(f"😂 {joke}")
-
-
-async def dice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    upsert_user(user)
-    roll = random.randint(1, 6)
-
-    row = get_user(user.id)
-    prev_high = row["dice_highscore"] if row else 0
-    if roll > prev_high:
-        update_stat(user.id, "dice_highscore", roll, mode="set")
-    update_stat(user.id, "dice_plays", 1, mode="inc")
-    update_stat(user.id, "games_played", 1, mode="inc")
-
-    # rewards
-    add_xp_and_coins(user.id, xp_gain=10, coins_gain=5)
-
-    await update.message.reply_text(f"🎲 You rolled: *{roll}*", parse_mode="Markdown")
-
-
-async def quote_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    upsert_user(user)
-    quotes = [
-        "The only way to do great work is to love what you do. - Steve Jobs",
-        "Innovation distinguishes between a leader and a follower. - Steve Jobs",
-        "Life is what happens when you're busy making other plans. - John Lennon",
-    ]
-    quote = random.choice(quotes)
-    await update.message.reply_text(f"✨ _{quote}_", parse_mode="Markdown")
-
-
-# -------- Profile / XP / Economy --------
 async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     upsert_user(user)
@@ -448,7 +304,6 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = row["coins"]
     msgs = row["messages_count"]
     birthday = row["birthday"] or "Not set"
-    title = row["title"] or "No title"
     badges = format_badges(row)
 
     # Birthday check
@@ -466,7 +321,6 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 *Your Profile:*\n\n"
         f"Username: @{username}\n"
         f"ID: `{row['id']}`\n"
-        f"Title: {title}\n"
         f"Birthday: {birthday}\n\n"
         f"⭐ *Level:* {level}\n"
         f"✨ *XP:* {xp}\n"
@@ -549,6 +403,23 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def dice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    upsert_user(user)
+    roll = random.randint(1, 6)
+
+    row = get_user(user.id)
+    prev_high = row["dice_highscore"] if row else 0
+    if roll > prev_high:
+        update_stat(user.id, "dice_highscore", roll, mode="set")
+    update_stat(user.id, "dice_plays", 1, mode="inc")
+    update_stat(user.id, "games_played", 1, mode="inc")
+
+    add_xp_and_coins(user.id, xp_gain=10, coins_gain=5)
+
+    await update.message.reply_text(f"🎲 You rolled: *{roll}*", parse_mode="Markdown")
+
+
 # -------- Notes & Tools --------
 async def note_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -581,7 +452,7 @@ async def notes_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, content, created_at FROM notes WHERE user_id = ? ORDER BY id DESC LIMIT 10", (user.id,))
+    cur.execute("SELECT id, content FROM notes WHERE user_id = ? ORDER BY id DESC LIMIT 10", (user.id,))
     rows = cur.fetchall()
     conn.close()
 
@@ -684,269 +555,51 @@ async def shorten_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Failed to shorten URL.", parse_mode="Markdown")
 
 
-async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# -------- Trivia & Math Commands (reuse game logic) --------
+async def trivia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     upsert_user(user)
-    row = get_user(user.id)
 
-    today_str = date.today().isoformat()
-    if row["last_daily"] == today_str:
-        await update.message.reply_text("📅 You already claimed today's reward. Come back tomorrow! 🌞")
-        return
-
-    quotes = [
-        "The future depends on what you do today. - Mahatma Gandhi",
-        "Do something today that your future self will thank you for.",
-        "Small steps every day lead to big results.",
+    trivia_qs = [
+        ("Which language is this bot written in?", "python"),
+        ("What does HTML stand for? (abbr only)", "html"),
+        ("Which company created Telegram?", "telegram"),
     ]
-    quote = random.choice(quotes)
-
-    # reward
-    add_xp_and_coins(user.id, xp_gain=25, coins_gain=20)
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("UPDATE users SET last_daily = ? WHERE id = ?", (today_str, user.id))
-    conn.commit()
-    conn.close()
-
+    q, ans = random.choice(trivia_qs)
+    context.user_data["trivia_answer"] = ans.lower()
     await update.message.reply_text(
-        f"🎁 *Daily Reward Claimed!*\n\n"
-        f"+25 XP, +20 Coins\n\n"
-        f"✨ _{quote}_",
+        "🧠 *Trivia Quiz!*\n\n"
+        f"Q: {q}\n\n"
+        "Send your answer as a message.",
         parse_mode="Markdown",
     )
 
 
-# -------- Leaderboard --------
-async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def math_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     upsert_user(user)
 
-    rps_rows = get_leaderboard("rps_wins")
-    dice_rows = get_leaderboard("dice_highscore")
-    xp_rows = get_leaderboard("xp")
-
-    text = "🏆 *Leaderboard*\n\n"
-
-    text += "🪨📄✂️ *RPS Wins:*\n"
-    if rps_rows:
-        for i, row in enumerate(rps_rows, start=1):
-            name = row["username"] or row["first_name"] or "Unknown"
-            text += f"{i}. {name} — {row['score']} wins\n"
-    else:
-        text += "No data yet.\n"
-
-    text += "\n🎲 *Dice Highscore:*\n"
-    if dice_rows:
-        for i, row in enumerate(dice_rows, start=1):
-            name = row["username"] or row["first_name"] or "Unknown"
-            text += f"{i}. {name} — {row['score']}\n"
-    else:
-        text += "No data yet.\n"
-
-    text += "\n✨ *Top XP:*\n"
-    if xp_rows:
-        for i, row in enumerate(xp_rows, start=1):
-            name = row["username"] or row["first_name"] or "Unknown"
-            text += f"{i}. {name} — {row['score']} XP\n"
-    else:
-        text += "No data yet.\n"
-
-    await update.message.reply_text(text, parse_mode="Markdown")
-
-
-# -------- Admin --------
-async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    upsert_user(user)
-
-    if not is_admin(user):
-        await update.message.reply_text("⛔ You are not allowed to access admin panel.")
-        return
-
-    user_count = get_user_count()
-    text = (
-        "🛠 *Admin Panel*\n\n"
-        f"👥 Total users: {user_count}\n\n"
-        "Commands:\n"
-        "/broadcast <text> - Send message to all users\n"
-        "/stats - Global stats\n"
-        "/topactive - Top active users\n"
-        "/warn (reply) - Warn a user\n"
-        "/ban (reply) - Ban a user\n"
-        "/unban (reply) - Unban a user\n"
-    )
-    await update.message.reply_text(text, parse_mode="Markdown")
-
-
-async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if not is_admin(user):
-        await update.message.reply_text("⛔ You are not allowed to broadcast.")
-        return
-
-    if not context.args:
-        await update.message.reply_text("Usage: `/broadcast your message`", parse_mode="Markdown")
-        return
-
-    message = " ".join(context.args)
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id FROM users")
-    rows = cur.fetchall()
-    conn.close()
-
-    sent = 0
-    failed = 0
-    for row in rows:
-        try:
-            await context.bot.send_message(chat_id=row["id"], text=message)
-            sent += 1
-        except Exception as e:
-            logger.warning("Failed to send broadcast to %s: %s", row["id"], e)
-            failed += 1
-
+    a = random.randint(1, 20)
+    b = random.randint(1, 20)
+    op = random.choice(["+", "-"])
+    expr = f"{a} {op} {b}"
+    answer = eval(expr)
+    context.user_data["math_answer"] = answer
     await update.message.reply_text(
-        f"✅ Broadcast finished.\nSent: {sent}\nFailed: {failed}",
+        "➕ *Math Challenge!*\n\n"
+        f"Solve: `{expr}`\n"
+        "Send your answer as a message.",
         parse_mode="Markdown",
     )
 
 
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if not is_admin(user):
-        await update.message.reply_text("⛔ Admins only.")
-        return
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM users")
-    (user_count,) = cur.fetchone()
-    cur.execute("SELECT SUM(messages_count), SUM(games_played) FROM users")
-    messages_sum, games_sum = cur.fetchone()
-    conn.close()
-
-    messages_sum = messages_sum or 0
-    games_sum = games_sum or 0
-
-    await update.message.reply_text(
-        f"📊 *Bot Stats:*\n\n"
-        f"👥 Users: {user_count}\n"
-        f"💬 Total messages tracked: {messages_sum}\n"
-        f"🎮 Total games played: {games_sum}\n",
-        parse_mode="Markdown",
-    )
-
-
-async def topactive_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if not is_admin(user):
-        await update.message.reply_text("⛔ Admins only.")
-        return
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT username, first_name, messages_count FROM users "
-        "WHERE messages_count > 0 ORDER BY messages_count DESC LIMIT 5"
-    )
-    rows = cur.fetchall()
-    conn.close()
-
-    if not rows:
-        await update.message.reply_text("No activity data yet.")
-        return
-
-    text = "💬 *Top Active Users:*\n\n"
-    for i, row in enumerate(rows, start=1):
-        name = row["username"] or row["first_name"] or "Unknown"
-        text += f"{i}. {name} — {row['messages_count']} messages\n"
-
-    await update.message.reply_text(text, parse_mode="Markdown")
-
-
-async def warn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if not is_admin(user):
-        await update.message.reply_text("⛔ Admins only.")
-        return
-
-    if not update.message.reply_to_message:
-        await update.message.reply_text("Reply to a user's message to warn them.")
-        return
-
-    target = update.message.reply_to_message.from_user
-    upsert_user(target)
-
-    update_stat(target.id, "warnings_count", 1, mode="inc")
-    row = get_user(target.id)
-    warns = row["warnings_count"]
-
-    await update.message.reply_text(
-        f"⚠️ @{target.username or target.first_name} has been warned. "
-        f"Total warnings: {warns}",
-        parse_mode="Markdown",
-    )
-
-
-async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if not is_admin(user):
-        await update.message.reply_text("⛔ Admins only.")
-        return
-
-    if not update.message.reply_to_message:
-        await update.message.reply_text("Reply to a user's message to ban them.")
-        return
-
-    target = update.message.reply_to_message.from_user
-
-    try:
-        await update.effective_chat.ban_member(target.id)
-        await update.message.reply_text(
-            f"⛔ User @{target.username or target.first_name} has been banned.",
-            parse_mode="Markdown",
-        )
-    except Exception as e:
-        logger.warning("Ban error: %s", e)
-        await update.message.reply_text("⚠️ Failed to ban user.", parse_mode="Markdown")
-
-
-async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if not is_admin(user):
-        await update.message.reply_text("⛔ Admins only.")
-        return
-
-    if not update.message.reply_to_message:
-        await update.message.reply_text("Reply to a user's message to unban them.")
-        return
-
-    target = update.message.reply_to_message.from_user
-
-    try:
-        await update.effective_chat.unban_member(target.id)
-        await update.message.reply_text(
-            f"✅ User @{target.username or target.first_name} has been unbanned.",
-            parse_mode="Markdown",
-        )
-    except Exception as e:
-        logger.warning("Unban error: %s", e)
-        await update.message.reply_text("⚠️ Failed to unban user.", parse_mode="Markdown")
-
-
-# -------------------- Callback Query Handler (Games + Menus) --------------------
+# -------------------- Callback Query Handler (Menus + Games) --------------------
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user = query.from_user
     upsert_user(user)
     data = query.data
-
-    row = get_user(user.id)
-    fun_mode = bool(row["fun_mode"]) if row else True
 
     if data == "help":
         text = (
@@ -955,20 +608,12 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/help - Show commands\n"
             "/time - Current time\n"
             "/me - Your info\n"
-            "/joke - Get a joke\n"
-            "/dice - Roll dice\n"
-            "/quote - Get quote\n"
             "/profile - Your stats\n"
-            "/leaderboard - Top players\n"
+            "/note - Save note\n"
+            "/weather - Weather info\n"
+            "/shorten - Short link\n"
         )
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=main_menu_keyboard())
-
-    elif data == "about":
-        await query.edit_message_text(
-            "ℹ️ *About This Bot*\n\nTeleBot+ v3.0 - Learning project with profiles, XP, coins, stats and games.",
-            parse_mode="Markdown",
-            reply_markup=main_menu_keyboard(),
-        )
 
     elif data == "time":
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -986,70 +631,11 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard(),
         )
 
-    elif data == "joke":
-        jokes = [
-            "Why do programmers prefer dark mode? Because light attracts bugs! 🐛",
-            "How many programmers does it take to change a light bulb? None!",
-        ]
-        await query.edit_message_text(
-            f"😂 {random.choice(jokes)}",
-            parse_mode="Markdown",
-            reply_markup=main_menu_keyboard(),
-        )
-
-    elif data == "dice":
-        roll = random.randint(1, 6)
-        row = get_user(user.id)
-        prev_high = row["dice_highscore"] if row else 0
-        if roll > prev_high:
-            update_stat(user.id, "dice_highscore", roll, mode="set")
-        update_stat(user.id, "dice_plays", 1, mode="inc")
-        update_stat(user.id, "games_played", 1, mode="inc")
-        add_xp_and_coins(user.id, xp_gain=10, coins_gain=5)
-
-        await query.edit_message_text(
-            f"🎲 *You rolled:* `{roll}`",
-            parse_mode="Markdown",
-            reply_markup=main_menu_keyboard(),
-        )
-
-    elif data == "quote":
-        quotes = [
-            "The only way to do great work is to love what you do. - Steve Jobs",
-            "Innovation distinguishes between a leader and a follower. - Steve Jobs",
-        ]
-        await query.edit_message_text(
-            f"✨ _{random.choice(quotes)}_",
-            parse_mode="Markdown",
-            reply_markup=main_menu_keyboard(),
-        )
-
     elif data == "games":
         await query.edit_message_text(
             "🎮 *Games Menu*\n\nChoose a game:",
             parse_mode="Markdown",
             reply_markup=games_menu_keyboard(),
-        )
-
-    elif data == "settings":
-        await query.edit_message_text(
-            "⚙️ *Settings*\n\nToggle your preferences:",
-            parse_mode="Markdown",
-            reply_markup=settings_menu_keyboard(fun_mode),
-        )
-
-    elif data == "toggle_fun":
-        new_fun_mode = not fun_mode
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("UPDATE users SET fun_mode = ? WHERE id = ?", (1 if new_fun_mode else 0, user.id))
-        conn.commit()
-        conn.close()
-
-        await query.edit_message_text(
-            "⚙️ *Settings*\n\nFun Mode updated!",
-            parse_mode="Markdown",
-            reply_markup=settings_menu_keyboard(new_fun_mode),
         )
 
     elif data == "back_main":
@@ -1059,6 +645,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard(),
         )
 
+    # ----- RPS -----
     elif data == "game_rps":
         rps_keyboard = InlineKeyboardMarkup(
             [
@@ -1113,6 +700,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=games_menu_keyboard(),
         )
 
+    # ----- Guess Number -----
     elif data == "game_guess":
         number = random.randint(1, 10)
         context.user_data["guess_number"] = number
@@ -1125,70 +713,43 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=games_menu_keyboard(),
         )
 
-    elif data == "leaderboard":
-        rps_rows = get_leaderboard("rps_wins")
-        dice_rows = get_leaderboard("dice_highscore")
-        xp_rows = get_leaderboard("xp")
-        text = "🏆 *Leaderboard*\n\n"
-
-        text += "🪨📄✂️ *RPS Wins:*\n"
-        if rps_rows:
-            for i, row in enumerate(rps_rows, start=1):
-                name = row["username"] or row["first_name"] or "Unknown"
-                text += f"{i}. {name} — {row['score']} wins\n"
-        else:
-            text += "No data yet.\n"
-
-        text += "\n🎲 *Dice Highscore:*\n"
-        if dice_rows:
-            for i, row in enumerate(dice_rows, start=1):
-                name = row["username"] or row["first_name"] or "Unknown"
-                text += f"{i}. {name} — {row['score']}\n"
-        else:
-            text += "No data yet.\n"
-
-        text += "\n✨ *Top XP:*\n"
-        if xp_rows:
-            for i, row in enumerate(xp_rows, start=1):
-                name = row["username"] or row["first_name"] or "Unknown"
-                text += f"{i}. {name} — {row['score']} XP\n"
-        else:
-            text += "No data yet.\n"
+    # ----- Hangman -----
+    elif data == "game_hangman":
+        words = ["python", "telegram", "database", "crypto", "bot"]
+        word = random.choice(words)
+        context.user_data["hangman_word"] = word
+        context.user_data["hangman_progress"] = ["_"] * len(word)
+        context.user_data["hangman_attempts"] = 6
 
         await query.edit_message_text(
-            text,
+            f"⚡ *Hangman Game*\n\nWord: `{' '.join(context.user_data['hangman_progress'])}`\n"
+            f"Attempts left: 6\n\nSend a single letter.",
             parse_mode="Markdown",
             reply_markup=games_menu_keyboard(),
         )
 
-    elif data == "game_trivia":
-        # small built-in trivia pool
-        trivia_qs = [
-            ("Which language is this bot written in?", "python"),
-            ("What does HTML stand for? (abbr only)", "html"),
-            ("Which company created Telegram?", "telegram"),
-        ]
-        q, ans = random.choice(trivia_qs)
-        context.user_data["trivia_answer"] = ans.lower()
+    # ----- Higher/Lower -----
+    elif data == "game_hilo":
+        number = random.randint(1, 50)
+        context.user_data["hilo_current"] = number
+
         await query.edit_message_text(
-            "🧠 *Trivia Quiz!*\n\n"
-            f"Q: {q}\n\n"
-            "Send your answer as a message.",
+            f"⬆️⬇️ *Higher or Lower*\n\nCurrent number: *{number}*\n"
+            "Send: `higher` or `lower`",
             parse_mode="Markdown",
             reply_markup=games_menu_keyboard(),
         )
 
-    elif data == "game_math":
-        a = random.randint(1, 20)
-        b = random.randint(1, 20)
-        op = random.choice(["+", "-"])
-        expr = f"{a} {op} {b}"
-        answer = eval(expr)
-        context.user_data["math_answer"] = answer
+    # ----- Anagram -----
+    elif data == "game_anagram":
+        words = ["python", "telegram", "coding", "player", "random"]
+        word = random.choice(words)
+        scrambled = ''.join(random.sample(word, len(word)))
+
+        context.user_data["anagram_answer"] = word
+
         await query.edit_message_text(
-            "➕ *Math Challenge!*\n\n"
-            f"Solve: `{expr}`\n"
-            "Send your answer as a message.",
+            f"🧩 *Anagram Game*\n\nUnscramble this word:\n`{scrambled}`",
             parse_mode="Markdown",
             reply_markup=games_menu_keyboard(),
         )
@@ -1204,15 +765,15 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     upsert_user(user)
-    text = update.message.text.strip()
+    text_msg = update.message.text.strip().lower()
 
     # Track messages for stats
     update_stat(user.id, "messages_count", 1, mode="inc")
 
-    # Guess-the-number game
+    # ----- Guess-the-number -----
     if "guess_number" in context.user_data:
         try:
-            guess = int(text)
+            guess = int(text_msg)
         except ValueError:
             await update.message.reply_text("❗ Please send a *number* between 1 and 10.", parse_mode="Markdown")
             return
@@ -1243,10 +804,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("guess_attempts", None)
         return
 
-    # Trivia answer
+    # ----- Trivia answer -----
     if "trivia_answer" in context.user_data:
         correct = context.user_data["trivia_answer"]
-        if text.lower().strip() == correct:
+        if text_msg == correct:
             await update.message.reply_text(
                 "✅ Correct! +20 XP, +15 coins.",
                 parse_mode="Markdown",
@@ -1261,10 +822,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("trivia_answer", None)
         return
 
-    # Math challenge answer
+    # ----- Math challenge answer -----
     if "math_answer" in context.user_data:
         try:
-            ans = int(text)
+            ans = int(text_msg)
         except ValueError:
             await update.message.reply_text("❗ Please send a *number* answer.", parse_mode="Markdown")
             return
@@ -1284,31 +845,82 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("math_answer", None)
         return
 
+    # ----- Hangman -----
+    if "hangman_word" in context.user_data:
+        letter = text_msg
+        if len(letter) != 1 or not letter.isalpha():
+            await update.message.reply_text("❗ Send only *one letter*.", parse_mode="Markdown")
+            return
+
+        word = context.user_data["hangman_word"]
+        progress = context.user_data["hangman_progress"]
+
+        if letter in word:
+            for i, char in enumerate(word):
+                if char == letter:
+                    progress[i] = letter
+            if "_" not in progress:
+                update_stat(user.id, "games_played", 1, "inc")
+                add_xp_and_coins(user.id, xp_gain=25, coins_gain=20)
+                context.user_data.pop("hangman_word", None)
+                context.user_data.pop("hangman_progress", None)
+                context.user_data.pop("hangman_attempts", None)
+                await update.message.reply_text(
+                    f"🎉 You solved it! Word: *{word}*\n+25 XP, +20 coins!",
+                    parse_mode="Markdown",
+                )
+            else:
+                await update.message.reply_text(
+                    "✨ Correct!\n" + " ".join(progress)
+                )
+        else:
+            context.user_data["hangman_attempts"] -= 1
+            if context.user_data["hangman_attempts"] <= 0:
+                word = context.user_data.pop("hangman_word")
+                context.user_data.pop("hangman_progress", None)
+                context.user_data.pop("hangman_attempts", None)
+                await update.message.reply_text(
+                    f"💀 You lost! The word was *{word}*.",
+                    parse_mode="Markdown",
+                )
+            else:
+                attempts = context.user_data["hangman_attempts"]
+                await update.message.reply_text(f"❌ Wrong!\nAttempts left: {attempts}")
+        return
+
+    # ----- Higher / Lower -----
+    if "hilo_current" in context.user_data:
+        guess = text_msg
+        number = context.user_data["hilo_current"]
+        new = random.randint(1, 50)
+        context.user_data["hilo_current"] = new
+
+        result = "higher" if new > number else "lower"
+        if guess == result:
+            add_xp_and_coins(user.id, xp_gain=10, coins_gain=5)
+            msg = f"🎉 Correct! New number: *{new}*\n+10 XP +5 Coins"
+        else:
+            msg = f"❌ Wrong! It was *{new}*.\nGame over."
+            context.user_data.pop("hilo_current", None)
+
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        return
+
+    # ----- Anagram -----
+    if "anagram_answer" in context.user_data:
+        correct = context.user_data["anagram_answer"]
+        if text_msg == correct:
+            add_xp_and_coins(user.id, xp_gain=20, coins_gain=10)
+            context.user_data.pop("anagram_answer", None)
+            await update.message.reply_text("🎉 Correct! +20 XP +10 coins")
+        else:
+            await update.message.reply_text("❌ Wrong! Try again.")
+        return
+
     # Fallback
     await update.message.reply_text(
         "💬 I didn't understand that.\nUse /help or press a button from the menu.",
     )
-
-
-# -------------------- Welcome New Members --------------------
-async def chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_member: ChatMemberUpdated = update.chat_member
-    new = chat_member.new_chat_member
-    old = chat_member.old_chat_member
-
-    if (
-        old.status in ("left", "kicked")
-        and new.status == "member"
-    ):
-        user = new.user
-        upsert_user(user)
-        try:
-            await context.bot.send_message(
-                chat_id=chat_member.chat.id,
-                text=f"👋 Welcome @{user.username or user.first_name} to this chat!",
-            )
-        except Exception as e:
-            logger.warning("Failed to send welcome message: %s", e)
 
 
 # -------------------- Main --------------------
@@ -1317,23 +929,22 @@ def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Core
+    # Core commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("time", time_command))
     app.add_handler(CommandHandler("me", me_command))
-    app.add_handler(CommandHandler("info", info_command))
-    app.add_handler(CommandHandler("joke", joke_command))
-    app.add_handler(CommandHandler("dice", dice_command))
-    app.add_handler(CommandHandler("quote", quote_command))
 
-    # Profile / economy
+    # Profile & economy
     app.add_handler(CommandHandler("profile", profile_command))
     app.add_handler(CommandHandler("setbio", setbio_command))
     app.add_handler(CommandHandler("setbirthday", setbirthday_command))
     app.add_handler(CommandHandler("balance", balance_command))
-    app.add_handler(CommandHandler("leaderboard", leaderboard_command))
-    app.add_handler(CommandHandler("daily", daily_command))
+
+    # Games commands
+    app.add_handler(CommandHandler("dice", dice_command))
+    app.add_handler(CommandHandler("trivia", trivia_cmd))
+    app.add_handler(CommandHandler("math", math_cmd))
 
     # Notes & tools
     app.add_handler(CommandHandler("note", note_add_command))
@@ -1342,55 +953,9 @@ def main():
     app.add_handler(CommandHandler("weather", weather_command))
     app.add_handler(CommandHandler("shorten", shorten_command))
 
-    # Games via commands (optional: /trivia, /math trigger same logic as buttons)
-    async def trivia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Instead of faking callback, just reuse logic directly:
-        trivia_qs = [
-            ("Which language is this bot written in?", "python"),
-            ("What does HTML stand for? (abbr only)", "html"),
-            ("Which company created Telegram?", "telegram"),
-        ]
-        q, ans = random.choice(trivia_qs)
-        context.user_data["trivia_answer"] = ans.lower()
-        await update.message.reply_text(
-            "🧠 *Trivia Quiz!*\n\n"
-            f"Q: {q}\n\n"
-            "Send your answer as a message.",
-            parse_mode="Markdown",
-        )
-
-    async def math_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        a = random.randint(1, 20)
-        b = random.randint(1, 20)
-        op = random.choice(["+", "-"])
-        expr = f"{a} {op} {b}"
-        answer = eval(expr)
-        context.user_data["math_answer"] = answer
-        await update.message.reply_text(
-            "➕ *Math Challenge!*\n\n"
-            f"Solve: `{expr}`\n"
-            "Send your answer as a message.",
-            parse_mode="Markdown",
-        )
-
-    app.add_handler(CommandHandler("trivia", trivia_cmd))
-    app.add_handler(CommandHandler("math", math_cmd))
-
-    # Admin
-    app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(CommandHandler("broadcast", broadcast_command))
-    app.add_handler(CommandHandler("stats", stats_command))
-    app.add_handler(CommandHandler("topactive", topactive_command))
-    app.add_handler(CommandHandler("warn", warn_command))
-    app.add_handler(CommandHandler("ban", ban_command))
-    app.add_handler(CommandHandler("unban", unban_command))
-
     # Buttons & text
     app.add_handler(CallbackQueryHandler(handle_buttons))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    # Welcome
-    app.add_handler(ChatMemberHandler(chat_member_update, ChatMemberHandler.CHAT_MEMBER))
 
     logger.info("Bot is starting...")
     app.run_polling()
