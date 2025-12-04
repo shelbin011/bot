@@ -65,7 +65,8 @@ def init_db():
             rps_wins INTEGER DEFAULT 0,
             rps_losses INTEGER DEFAULT 0,
             rps_draws INTEGER DEFAULT 0,
-            birthday TEXT
+            birthday TEXT,
+            last_daily TEXT
         )
         """
     )
@@ -81,6 +82,11 @@ def init_db():
         )
         """
     )
+
+    # Indexes for better leaderboard/stat performance
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_users_xp ON users (xp)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_users_coins ON users (coins)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_users_games ON users (games_played)")
 
     conn.commit()
     conn.close()
@@ -143,6 +149,20 @@ def add_xp_and_coins(user_id: int, xp_gain: int = 0, coins_gain: int = 0):
         update_stat(user_id, "level", new_level, mode="set")
 
 
+def get_leaderboard(field: str, limit: int = 5):
+    """Generic leaderboard helper."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        f"SELECT username, first_name, {field} as score FROM users "
+        f"WHERE {field} > 0 ORDER BY {field} DESC LIMIT ?",
+        (limit,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
 def format_badges(row) -> str:
     badges = []
     if row["dice_highscore"] >= 6:
@@ -180,6 +200,10 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("👤 Profile", callback_data="me"),
             InlineKeyboardButton("🎮 Games", callback_data="games"),
+        ],
+        [
+            InlineKeyboardButton("🏆 Leaderboard", callback_data="leaderboard_btn"),
+            InlineKeyboardButton("🎁 Daily", callback_data="daily_btn"),
         ],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -225,6 +249,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/note - Save a note\n"
         "/weather - Weather info\n"
         "/shorten - Shorten link\n"
+        "/daily - Claim daily rewards\n"
+        "/leaderboard - Top players\n"
+        "/stats - Bot statistics\n"
     )
 
     await update.message.reply_text(
@@ -249,7 +276,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/profile - View your profile & stats\n"
         "/setbio <text> - Set your bio\n"
         "/setbirthday DD-MM - Set your birthday\n"
-        "/balance - View XP, level & coins\n\n"
+        "/balance - View XP, level & coins\n"
+        "/daily - Claim daily rewards\n"
+        "/leaderboard - View top players\n"
+        "/stats - Bot statistics\n\n"
         "🎮 *Games:*\n"
         "Use the *Games* button or:\n"
         "/dice - Roll a dice\n"
@@ -593,6 +623,85 @@ async def math_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# -------- Daily, Leaderboard, Stats --------
+async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    upsert_user(user)
+    row = get_user(user.id)
+
+    today_str = date.today().isoformat()
+    if row["last_daily"] == today_str:
+        await update.message.reply_text("📅 You already claimed today's reward. Come back tomorrow! 🌞")
+        return
+
+    # reward
+    add_xp_and_coins(user.id, xp_gain=30, coins_gain=25)
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET last_daily = ? WHERE id = ?", (today_str, user.id))
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(
+        "🎁 *Daily Reward Claimed!*\n\n"
+        "+30 XP\n+25 Coins\nCome back tomorrow!",
+        parse_mode="Markdown",
+    )
+
+
+async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    upsert_user(user)
+
+    xp_rows = get_leaderboard("xp")
+    coin_rows = get_leaderboard("coins")
+    game_rows = get_leaderboard("games_played")
+
+    def section(title, rows, suffix=""):
+        s = title + "\n"
+        if rows:
+            for i, r in enumerate(rows, start=1):
+                name = r["username"] or r["first_name"] or "Unknown"
+                s += f"{i}. {name} — {r['score']}{suffix}\n"
+        else:
+            s += "No data yet.\n"
+        s += "\n"
+        return s
+
+    text = "🏆 *Leaderboard*\n\n"
+    text += section("✨ Top XP:", xp_rows, " XP")
+    text += section("💰 Top Coins:", coin_rows, " coins")
+    text += section("🎮 Top Gamers:", game_rows, " games")
+
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    upsert_user(user)
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM users")
+    users = cur.fetchone()[0]
+
+    cur.execute("SELECT SUM(games_played), SUM(messages_count) FROM users")
+    games_sum, msgs_sum = cur.fetchone()
+    conn.close()
+
+    games_sum = games_sum or 0
+    msgs_sum = msgs_sum or 0
+
+    await update.message.reply_text(
+        f"📊 *Bot Stats*\n\n"
+        f"👥 Total Users: {users}\n"
+        f"🎮 Games Played: {games_sum}\n"
+        f"💬 Messages Tracked: {msgs_sum}\n",
+        parse_mode="Markdown",
+    )
+
+
 # -------------------- Callback Query Handler (Menus + Games) --------------------
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -612,6 +721,9 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/note - Save note\n"
             "/weather - Weather info\n"
             "/shorten - Short link\n"
+            "/daily - Claim daily rewards\n"
+            "/leaderboard - View top players\n"
+            "/stats - Bot statistics\n"
         )
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=main_menu_keyboard())
 
@@ -644,6 +756,53 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             reply_markup=main_menu_keyboard(),
         )
+
+    elif data == "leaderboard_btn":
+        # Show leaderboard inside the main menu message
+        xp_rows = get_leaderboard("xp")
+        coin_rows = get_leaderboard("coins")
+        game_rows = get_leaderboard("games_played")
+
+        def section(title, rows, suffix=""):
+            s = title + "\n"
+            if rows:
+                for i, r in enumerate(rows, start=1):
+                    name = r["username"] or r["first_name"] or "Unknown"
+                    s += f"{i}. {name} — {r['score']}{suffix}\n"
+            else:
+                s += "No data yet.\n"
+            s += "\n"
+            return s
+
+        text = "🏆 *Leaderboard*\n\n"
+        text += section("✨ Top XP:", xp_rows, " XP")
+        text += section("💰 Top Coins:", coin_rows, " coins")
+        text += section("🎮 Top Gamers:", game_rows, " games")
+
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=main_menu_keyboard())
+
+    elif data == "daily_btn":
+        row = get_user(user.id)
+        today_str = date.today().isoformat()
+        if row["last_daily"] == today_str:
+            await query.edit_message_text(
+                "📅 You already claimed today's reward. Come back tomorrow! 🌞",
+                parse_mode="Markdown",
+                reply_markup=main_menu_keyboard(),
+            )
+        else:
+            add_xp_and_coins(user.id, xp_gain=30, coins_gain=25)
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("UPDATE users SET last_daily = ? WHERE id = ?", (today_str, user.id))
+            conn.commit()
+            conn.close()
+            await query.edit_message_text(
+                "🎁 *Daily Reward Claimed!*\n\n"
+                "+30 XP\n+25 Coins\nCome back tomorrow!",
+                parse_mode="Markdown",
+                reply_markup=main_menu_keyboard(),
+            )
 
     # ----- RPS -----
     elif data == "game_rps":
@@ -744,7 +903,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "game_anagram":
         words = ["python", "telegram", "coding", "player", "random"]
         word = random.choice(words)
-        scrambled = ''.join(random.sample(word, len(word)))
+        scrambled = "".join(random.sample(word, len(word)))
 
         context.user_data["anagram_answer"] = word
 
@@ -940,6 +1099,9 @@ def main():
     app.add_handler(CommandHandler("setbio", setbio_command))
     app.add_handler(CommandHandler("setbirthday", setbirthday_command))
     app.add_handler(CommandHandler("balance", balance_command))
+    app.add_handler(CommandHandler("daily", daily_command))
+    app.add_handler(CommandHandler("leaderboard", leaderboard_command))
+    app.add_handler(CommandHandler("stats", stats_command))
 
     # Games commands
     app.add_handler(CommandHandler("dice", dice_command))
